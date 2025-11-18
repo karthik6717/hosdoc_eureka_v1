@@ -1,0 +1,60 @@
+version: 0.2
+
+env:
+  variables:
+    # These will be overridden by CodeBuild environment variables
+    IMAGE_REPO_NAME: "hosdoc_eureka_registry"
+    REPOSITORY_URI: "774041140416.dkr.ecr.ap-southeast-2.amazonaws.com/hosdoc_eureka_registry"
+    AWS_REGION: "ap-southeast-2"
+
+phases:
+  pre_build:
+    commands:
+      - echo "===== PRE-BUILD PHASE ====="
+      - aws --version
+
+      # Extract registry host from REPOSITORY_URI
+      - REGISTRY=$(echo $REPOSITORY_URI | awk -F'/' '{print $1}')
+      - echo "Registry host: $REGISTRY"
+
+      # Create repo if missing (safe on repeated runs)
+      - |
+        aws ecr describe-repositories --repository-names ${IMAGE_REPO_NAME} --region ${AWS_REGION} || \
+        aws ecr create-repository --repository-name ${IMAGE_REPO_NAME} --region ${AWS_REGION}
+
+      # Login to ECR
+      - echo "Logging into ECR..."
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin $REGISTRY
+
+      # Create image tag: short commit ID or build ID fallback
+      - |
+        if [ -n "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then
+          IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7)
+        else
+          IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
+        fi
+      - echo "Using image tag: $IMAGE_TAG"
+
+  build:
+    commands:
+      - echo "===== BUILD PHASE ====="
+      - echo "Building Docker image..."
+      - docker build -t ${REPOSITORY_URI}:latest .
+      - docker tag ${REPOSITORY_URI}:latest ${REPOSITORY_URI}:${IMAGE_TAG}
+
+  post_build:
+    commands:
+      - echo "===== POST-BUILD PHASE ====="
+      - echo "Pushing Docker images to ECR..."
+      - docker push ${REPOSITORY_URI}:latest
+      - docker push ${REPOSITORY_URI}:${IMAGE_TAG}
+
+      - echo "Writing imageDetail.json for CodePipeline/CodeDeploy..."
+      - printf '[{"name":"%s","imageUri":"%s"}]' "${IMAGE_REPO_NAME}" "${REPOSITORY_URI}:${IMAGE_TAG}" > imageDetail.json
+
+      - echo "imageDetail.json contents:"
+      - cat imageDetail.json
+
+artifacts:
+  files:
+    - imageDetail.json
