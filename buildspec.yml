@@ -1,37 +1,41 @@
 version: 0.2
 
-env:
-  variables:
-    IMAGE_REPO_NAME: "hosdoc_eureka_registry"
-    REPOSITORY_URI: "774041140416.dkr.ecr.ap-southeast-2.amazonaws.com/hosdoc_eureka_registry"
-    AWS_REGION: "ap-southeast-2"
-
 phases:
   pre_build:
     commands:
       - echo "===== PRE-BUILD ====="
       - aws --version
+
+      # Extract registry host from REPOSITORY_URI
       - REGISTRY=$(echo $REPOSITORY_URI | awk -F'/' '{print $1}')
       - echo "Registry host: $REGISTRY"
-      - aws ecr describe-repositories --repository-names ${IMAGE_REPO_NAME} --region ${AWS_REGION} || aws ecr create-repository --repository-name ${IMAGE_REPO_NAME} --region ${AWS_REGION}
+
+      # Create repository if missing
+      - aws ecr describe-repositories --repository-names $IMAGE_REPO_NAME --region $AWS_REGION || aws ecr create-repository --repository-name $IMAGE_REPO_NAME --region $AWS_REGION
+
+      # Login to ECR
       - echo "Logging into ECR..."
-      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin $REGISTRY
-      - if [ -n "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7); else IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F\":\" '{print $2}'); fi
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $REGISTRY
+
+      # Determine image tag (short git commit or fallback)
+      - if [ -n "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c1-7); else IMAGE_TAG=build-${CODEBUILD_BUILD_ID#*:}; fi
       - echo "Using image tag: $IMAGE_TAG"
 
   build:
     commands:
       - echo "===== BUILD ====="
-      - docker build -t ${REPOSITORY_URI}:latest .
-      - docker tag ${REPOSITORY_URI}:latest ${REPOSITORY_URI}:${IMAGE_TAG}
+      - docker build -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
 
   post_build:
     commands:
       - echo "===== POST-BUILD ====="
-      - docker push ${REPOSITORY_URI}:latest
-      - docker push ${REPOSITORY_URI}:${IMAGE_TAG}
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+
       - echo "Creating imageDetail.json..."
-      - printf '[{\"name\":\"%s\",\"imageUri\":\"%s\"}]' "${IMAGE_REPO_NAME}" "${REPOSITORY_URI}:${IMAGE_TAG}" > imageDetail.json
+      - printf '[{\"name\":\"%s\",\"imageUri\":\"%s\"}]' "$IMAGE_REPO_NAME" "$REPOSITORY_URI:$IMAGE_TAG" > imageDetail.json
+
       - echo "imageDetail.json:"
       - cat imageDetail.json
 
