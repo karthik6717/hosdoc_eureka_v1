@@ -11,5 +11,4 @@ public class HosdocEurekaApplication {
 	public static void main(String[] args) {
 		SpringApplication.run(HosdocEurekaApplication.class, args);
 	}
-
 }
